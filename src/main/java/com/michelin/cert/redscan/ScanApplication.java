@@ -104,7 +104,7 @@ public class ScanApplication {
         if (streamGobbler.getExitStatus() == 0) {
           JSONArray results = analyzeLines(httpMessage, streamGobbler.getStandardOutputs());
           LogManager.getLogger(ScanApplication.class).info(String.format("Nuclei output for %s : %s ", httpMessage.toUrl(), results.toString()));
-          datalakeConfig.upsertHttpServiceField(httpMessage.getDomain(), httpMessage.getPort(), "nucleiexposure", results);
+          datalakeConfig.upsertHttpServiceField(httpMessage.getDomain(), httpMessage.getPort(), httpMessage.getProtocol(), "nucleiexposure", results);
         }
       }
 
