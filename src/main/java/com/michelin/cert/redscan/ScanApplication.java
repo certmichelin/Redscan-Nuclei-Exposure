@@ -17,9 +17,9 @@
 package com.michelin.cert.redscan;
 
 import com.michelin.cert.redscan.utils.datalake.DatalakeStorageException;
-import com.michelin.cert.redscan.utils.models.HttpService;
-import com.michelin.cert.redscan.utils.models.Severity;
-import com.michelin.cert.redscan.utils.models.Vulnerability;
+import com.michelin.cert.redscan.utils.models.reports.Severity;
+import com.michelin.cert.redscan.utils.models.reports.Vulnerability;
+import com.michelin.cert.redscan.utils.models.services.HttpService;
 import com.michelin.cert.redscan.utils.system.OsCommandExecutor;
 import com.michelin.cert.redscan.utils.system.StreamGobbler;
 
@@ -32,11 +32,11 @@ import org.json.simple.parser.ParseException;
 
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
+
 
 /**
  * RedScan scanner main class.
@@ -51,9 +51,6 @@ public class ScanApplication {
 
   //Only required if pushing data to queues
   private final RabbitTemplate rabbitTemplate;
-
-  @Autowired
-  private DatalakeConfig datalakeConfig;
 
   /**
    * Constructor to init rabbit template. Only required if pushing data to queues
@@ -93,8 +90,9 @@ public class ScanApplication {
    */
   @RabbitListener(queues = {RabbitMqConfig.QUEUE_HTTP_SERVICES})
   public void receiveMessage(String message) {
-    HttpService httpMessage = new HttpService(message);
+    HttpService httpMessage = new HttpService();
     try {
+      httpMessage.fromJson(message);
       LogManager.getLogger(ScanApplication.class).info(String.format("Check exposures from : %s", httpMessage.toUrl()));
       OsCommandExecutor osCommandExecutor = new OsCommandExecutor();
       String command = String.format("/nucleilauncher %s exposures/", httpMessage.toUrl());
@@ -104,12 +102,14 @@ public class ScanApplication {
         if (streamGobbler.getExitStatus() == 0) {
           JSONArray results = analyzeLines(httpMessage, streamGobbler.getStandardOutputs());
           LogManager.getLogger(ScanApplication.class).info(String.format("Nuclei output for %s : %s ", httpMessage.toUrl(), results.toString()));
-          datalakeConfig.upsertHttpServiceField(httpMessage.getDomain(), httpMessage.getPort(), httpMessage.getProtocol(), "nucleiexposure", results);
+          httpMessage.upsertField( "nucleiexposure", results);
         }
       }
 
     } catch (DatalakeStorageException ex) {
       LogManager.getLogger(ScanApplication.class).error(String.format("Datalake Storage Exception : %s", ex.getMessage()));
+    } catch (Exception ex) {
+      LogManager.getLogger(ScanApplication.class).error(String.format("General Exception : %s", ex.getMessage()));
     }
   }
 
@@ -143,8 +143,8 @@ public class ScanApplication {
         Object obj = parser.parse(line);
         jsonResult = (JSONObject) obj;
 
-        String url = (String) jsonResult.get("matched");
-        String templateId = (String) jsonResult.get("templateID");
+        String url = (String) jsonResult.get("matched-at");
+        String templateId = (String) jsonResult.get("template-id");
 
         //Retrieve template info
         JSONObject info = (JSONObject) jsonResult.get("info");
@@ -152,7 +152,7 @@ public class ScanApplication {
         String severity = (String) info.get("severity");
 
         //Retrieve extracted results.
-        JSONArray extractedResultArray = (JSONArray) jsonResult.get("extracted_results");
+        JSONArray extractedResultArray = (JSONArray) jsonResult.get("extracted-results");
         String extractedResult = "";
         if (extractedResultArray != null) {
           extractedResult = String.format(", Extracted values : %s", extractedResultArray.toString());
@@ -196,15 +196,15 @@ public class ScanApplication {
 
   private void raiseVulnerability(int severity, HttpService service, String vulnName, String title, String message) {
     Vulnerability vuln = new Vulnerability(
-            Vulnerability.generateId("redscan-nuclei-exposure", String.format("%s%s", service.getDomain(), service.getPort()), vulnName),
             severity,
+            vulnName,
             title,
             message,
             service.toUrl(),
-            "redscan-nuclei-exposure"
-    );
+            String.format("%s%s", service.getDomain(), service.getPort(), service.isSsl() ? "https" : "http"),
+            "redscan-nuclei-exposure");
 
-    rabbitTemplate.convertAndSend(RabbitMqConfig.FANOUT_VULNERABILITIES_EXCHANGE_NAME, "", vuln.toJson());
+    rabbitTemplate.convertAndSend(vuln.getFanoutExchangeName(), "", vuln.toJson());
   }
 
 }
