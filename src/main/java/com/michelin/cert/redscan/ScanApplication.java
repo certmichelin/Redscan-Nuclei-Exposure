@@ -17,6 +17,7 @@
 package com.michelin.cert.redscan;
 
 import com.michelin.cert.redscan.utils.datalake.DatalakeStorageException;
+import com.michelin.cert.redscan.utils.models.reports.CommonTags;
 import com.michelin.cert.redscan.utils.models.reports.Severity;
 import com.michelin.cert.redscan.utils.models.reports.Vulnerability;
 import com.michelin.cert.redscan.utils.models.services.HttpService;
@@ -36,7 +37,6 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
-
 
 /**
  * RedScan scanner main class.
@@ -102,7 +102,7 @@ public class ScanApplication {
         if (streamGobbler.getExitStatus() == 0) {
           JSONArray results = analyzeLines(httpMessage, streamGobbler.getStandardOutputs());
           LogManager.getLogger(ScanApplication.class).info(String.format("Nuclei output for %s : %s ", httpMessage.toUrl(), results.toString()));
-          httpMessage.upsertField( "nucleiexposure", results);
+          httpMessage.upsertField("nucleiexposure", results);
         }
       }
 
@@ -196,13 +196,14 @@ public class ScanApplication {
 
   private void raiseVulnerability(int severity, HttpService service, String vulnName, String title, String message) {
     Vulnerability vuln = new Vulnerability(
+            Vulnerability.generateId("redscan-nuclei-exposure", vulnName, service.getDomain(), service.getPort(), service.isSsl() ? "https" : "http"),
             severity,
-            vulnName,
             title,
             message,
             service.toUrl(),
-            String.format("%s%s", service.getDomain(), service.getPort(), service.isSsl() ? "https" : "http"),
-            "redscan-nuclei-exposure");
+            "redscan-nuclei-exposure",
+            new String[]{CommonTags.EXPOSURE, CommonTags.MISCONFIGURATION}
+    );
 
     rabbitTemplate.convertAndSend(vuln.getFanoutExchangeName(), "", vuln.toJson());
   }
